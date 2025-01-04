@@ -202,7 +202,7 @@ The strategy here is to handle each permutation of a multi-qubit set of qargs si
 
 Currently, two score components implemented are:
 
-- `CountGates(min_num_qubits=0)`: count the total number of gates in the rule that use at least
+- `GateCount(min_num_qubits=0)`: count the total number of gates in the rule that use at least
   `min_num_qubits` qubits.
 - `LogFidelity(bin=None)`: the sum of the negative natural-log-fidelities of the gates.
    For example, an errorless gate will have `0` for this, since $\ln(1) = 0$, while a gate with 0 fidelity would have a score of $\infty$.
