@@ -211,15 +211,17 @@ Currently, two score components implemented are:
 The `bin` argument is used to control when two of the same instructions in the `Target` on different `qargs` (say a `cx` on `(0, 1)` and `(2, 3)`) can be considered equivalent.
 For each instruction with a fidelity $f = 1 - \epsilon$, we calculate its "binned" infidelity by rounding the _infidelity_ ($\epsilon$) in logarithmic space to the nearest multiple of `bin_width`, then calculating the fidelity from this.
 Concretely, the binned infidelity is:
-$$
+
+```math
 \epsilon_\text{binned} = \begin{cases}
     1 & \text{if $f = 0$}\\
     0 & \text{if $f = 1$ or $\text{bin width} = \infty$}\\
     1 - f & \text{if $\text{bin width} = 0$}\\
-    \exp\Bigl[\operatorname{round}\bigl(\frac{\ln\epsilon}{\text{bin width}}\bigr) \times \text{bin width}\Bigr]
+    \exp\Bigl[\mathrm{round}\bigl(\frac{\ln\epsilon}{\text{bin width}}\bigr) \times \text{bin width}\Bigr]
         & \text{otherwise}.
 \end{cases}
-$$
+```
+
 After `Target` homogenisation is done using the binned infidelities, the "error" of the homogenized instruction is the geometric mean of the _actual_ infidelities of the instructions considered equal ($\bar\epsilon$).
 The actual value used by the score is $-\ln(1 - \bar\epsilon)$, since this has the additive and minimising properties required of a score component.
 
