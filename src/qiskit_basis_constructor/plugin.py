@@ -23,10 +23,14 @@ class BasisConstructorPlugin(PassManagerStagePlugin):
         equivalences = DEFAULT_EQUIVALENCE_LIBRARY
 
         optimization_level = optimization_level if optimization_level is not None else 2
-        if optimization_level < 2:
+        if optimization_level == 0:
             score = [GateCount(2), GateCount()]
+        elif optimization_level == 1:
+            # Use fidelity averaged over all gates.
+            score = [LogFidelity(math.inf), GateCount(2), GateCount()]
         else:
-            score = [LogFidelity(math.log(10)), GateCount()]
+            # Use nearest-nines fidelity averaging.
+            score = [LogFidelity(math.log(10)), GateCount(2), GateCount()]
 
         return PassManager(
             [

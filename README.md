@@ -48,9 +48,9 @@ transpile(qc, backend, optimization_level=2, translation_method="constructor-bet
 
 (Note the default `translation_method` is `"translator"`, corresponding to the `BasisTranslator`.)
 
-At optimisation levels 0 and 1, the scoring heuristic for translations is `(num_2q_gates, num_gates)`.
-At optimisation levels 2 (the default for Qiskit 1.3+) and 3, the scoring heuristic is
-`(neg_log_fidelity, num_gates)`, where the fidelity homogenisation binning has a width of $\ln(10)$.
+At optimisation levels 0, the scoring heuristic for translations is `(num_2q_gates, num_gates)`.
+At optimisation levels 1, 2 (the default for Qiskit 1.3+) and 3, the scoring heuristic is
+`(neg_log_fidelity, num_2q_gates, num_gates)`, where the fidelity homogenisation binning has a width of $\ln(10)$ at O2 and O3, while O1 uses the average over all qubit pairs.
 See "Score components" below for more detail on these.
 
 
