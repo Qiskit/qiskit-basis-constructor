@@ -287,4 +287,4 @@ the DAG data structures that other core Qiskit transpiler passes have.
 
 ## Copyright and licensing
 
-Currently this is only IBM inner source, and should not be shared beyond that.
+This is licensed under the terms of the Apache 2.0 licence.
