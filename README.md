@@ -278,13 +278,13 @@ The Qiskit translator algorithm was designed at a time when backends were descri
 
 ## Future work
 
-If this proves useful in internal alpha testing within IBM Quantum, it's likely to graduate to a public open-source beta, and then to become part of Qiskit proper.
 Assuming everything goes as planned, this may well replace the default `BasisTranslator` as the translation method for all `Target`s at some point in the future (likely Qiskit 3), and potentially for limited subsets of `Target`s sooner (e.g. for fractional-gate backends).
 
-If this does enter Qiskit proper, it will almost certainly be rewritten in Rust.
+When this does enter Qiskit proper, it will almost certainly be rewritten in Rust.
 The current implementation is not optimised, and does not enjoy the low-level fast-path access to
 the DAG data structures that other core Qiskit transpiler passes have.
 
 ## Copyright and licensing
 
+This is a Qiskit project.
 This is licensed under the terms of the Apache 2.0 licence.
