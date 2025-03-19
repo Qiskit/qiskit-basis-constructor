@@ -372,3 +372,93 @@ class TestConstructor(unittest.TestCase):
 
         pass_ = BasisConstructor(standard_equivalence_library(), [GateCount()], target)
         self.assertEqual(pass_(qc), expected)
+
+    def test_global_operation(self):
+        err_low = InstructionProperties(error=1e-8)
+        err_med = InstructionProperties(error=1e-3)
+        err_high = InstructionProperties(error=1e-1)
+        target = Target(4)
+        # X, CX and H are all globals with medium error rates - they should be chosen iff no rule
+        # for the particular qargs contains a `err_high`.
+        target.add_instruction(lib.XGate(), {None: err_med})
+        target.add_instruction(lib.CXGate(), {None: err_med})
+        target.add_instruction(lib.HGate(), {None: err_med})
+        # Specific instructions.  We should use the globals for cases where any of the error rates
+        # are `err_high`.  Note we don't define any specific instructions on q3;
+        target.add_instruction(lib.SGate(), {(0,): err_high, (1,): err_low, (2,): err_low})
+        target.add_instruction(lib.SXGate(), {(0,): err_low, (1,): err_low, (2,): err_high})
+        target.add_instruction(
+            lib.CZGate(),
+            {(0, 1): err_low, (1, 2): err_low, (0, 2): err_high},
+        )
+
+        qc = QuantumCircuit(4)
+        # Qubits 0 and 1 should both prefer to be SX.SX, but qubit 2 wants to be X.
+        qc.x(0)
+        qc.x(1)
+        qc.x(2)
+        # Qubit 3 has no specific rules for it, but the blanket definitions of X and H should allow
+        # this translation.
+        qc.z(3)
+        qc.barrier()
+        qc.cx(0, 1)
+        qc.cx(1, 0)
+        qc.barrier()
+        qc.cx(1, 2)
+        qc.cx(2, 1)
+        qc.barrier()
+        qc.cx(0, 2)
+        qc.cx(2, 0)
+
+        expected = QuantumCircuit(4)
+        # Specific error is lower.
+        expected.sx(0)
+        expected.sx(0)
+        expected.sx(1)
+        expected.sx(1)
+        # Global error is lower.
+        expected.x(2)
+        # All done by globals.
+        expected.x(3)
+        expected.h(3)
+        expected.x(3)
+
+        # The S.SX.S form is cheaper than H on qubit 1, and specific CZ is cheaper than global CX.
+        expected.barrier()
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        expected.cz(0, 1)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        # On qubit 0, the H form is cheaper, while specific CZ is cheaper than global CX.
+        expected.h(0)
+        expected.cz(0, 1)
+        expected.h(0)
+
+        # CZ(1, 2) is still cheaper than CX(1, 2), then the same logic as above applies to
+        # single-qubit operations on qubit 1, while qubit 2 differs only that SX is the expensive
+        # one, not S.
+        expected.barrier()
+        expected.h(2)
+        expected.cz(1, 2)
+        expected.h(2)
+
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        expected.cz(1, 2)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+
+        # On (0, 2) and (2, 0), the global CX should be cheaper than the specific CZ.
+        expected.barrier()
+        expected.cx(0, 2)
+        expected.cx(2, 0)
+
+        pass_ = BasisConstructor(
+            standard_equivalence_library(), [LogFidelity(), GateCount()], target
+        )
+        self.assertEqual(pass_(qc), expected)
