@@ -17,7 +17,14 @@ import warnings
 
 import ddt
 
-from qiskit.circuit import EquivalenceLibrary, library as lib, QuantumCircuit, Parameter, Measure
+import qiskit
+from qiskit.circuit import (
+    EquivalenceLibrary,
+    library as lib,
+    QuantumCircuit,
+    Parameter,
+    Measure,
+)
 from qiskit.circuit.classical import types
 from qiskit.quantum_info import Operator
 from qiskit.transpiler import Target, InstructionProperties
@@ -123,7 +130,8 @@ class TestConstructor(unittest.TestCase):
             if instruction.name == "measure":
                 continue
             state = state.compose(
-                instruction.operation.to_matrix(), qargs=[qargs_map[q] for q in instruction.qubits]
+                instruction.operation.to_matrix(),
+                qargs=[qargs_map[q] for q in instruction.qubits],
             )
         bell_op = Operator([[1, 1, 0j, 0], [0, 0, 1, -1], [0, 0, 1, 1], [1, -1, 0, 0]])
         bell_op /= math.sqrt(2)
@@ -196,7 +204,9 @@ class TestConstructor(unittest.TestCase):
         expected.barrier()
 
         pass_ = BasisConstructor(
-            standard_equivalence_library(), [LogFidelity(math.log(10)), GateCount()], target
+            standard_equivalence_library(),
+            [LogFidelity(math.log(10)), GateCount()],
+            target,
         )
         self.assertEqual(pass_(multi_bell), expected)
 
@@ -248,6 +258,10 @@ class TestConstructor(unittest.TestCase):
         num_2q_gates = len([gate for gate in out.data if len(gate.qubits) == 2])
         self.assertEqual(num_2q_gates, 6)  # Three swaps, with each swap taking two 2q gates.
 
+    @unittest.skipUnless(
+        int(qiskit.__version__.split(".", maxsplit=2)[0]) < 2,
+        "c_if unsupported since Qiskit 2",
+    )
     def test_conditional_operation(self):
         qc = QuantumCircuit(2, 2)
         expected = qc.copy_empty_like()

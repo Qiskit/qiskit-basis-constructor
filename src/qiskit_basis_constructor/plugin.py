@@ -48,7 +48,6 @@ class BasisConstructorPlugin(PassManagerStagePlugin):
             [
                 UnitarySynthesis(
                     approximation_degree=pass_manager_config.approximation_degree,
-                    backend_props=pass_manager_config.backend_properties,
                     basis_gates=pass_manager_config.basis_gates,
                     coupling_map=pass_manager_config.coupling_map,
                     method=pass_manager_config.unitary_synthesis_method,

@@ -129,7 +129,7 @@ class BasisConstructor(TransformationPass):
             # replacements will actually use.
             out.global_phase += replacement.global_phase
             for instruction in replacement.data:
-                if node.condition is not None:
+                if getattr(node, "condition", None) is not None:
                     instruction = instruction.replace(
                         operation=instruction.operation.copy().c_if(*node.condition)
                     )
