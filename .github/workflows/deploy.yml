@@ -22,7 +22,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -U hatch
+        run: pip install -U hatch pip
 
       - name: Build package
         run: hatch build
@@ -30,7 +30,6 @@ jobs:
       - name: Verify package
         run: |
           set -e
-          source .venv/bin/activate
 
           pip install ./dist/qiskit_basis_constructor-*.whl
 
@@ -38,7 +37,7 @@ jobs:
           tag_version=${GITHUB_REF#refs/tags/v}
           # We could get this from the wheel filename too, but it's easier to
           # test with Python built-ins.
-          wheel_version=$(python3 -c 'from importlib.metadata import version; print(version("qiskit_basis_constructor"))')
+          wheel_version=$(python -c 'from importlib.metadata import version; print(version("qiskit_basis_constructor"))')
 
           if [[ "$tag_version" != "$wheel_version" ]]; then
             echo "Version mismatch: tag says '$tag_version', wheel says '$wheel_version'" >&2
@@ -46,7 +45,7 @@ jobs:
           fi
 
           # Last-ditch validity check that the wheel actually imports.
-          python3 -c 'import qiskit_basis_constructor'
+          python -c 'import qiskit_basis_constructor'
 
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
