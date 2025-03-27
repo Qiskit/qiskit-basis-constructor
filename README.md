@@ -12,16 +12,17 @@ This plugin is an exposure of a single transpiler pass, `BasisConstructor`, whic
 
 ## Installation
 
-> [!WARNING]
->
-> This package is not currently released on PyPI, so installation is a bit more manual.
-
-Install by cloning the repository and installing the local copy:
+This is available on PyPI under the name `qiskit-basis-constructor`.
 
 ```bash
-git clone https://<this repository url>
-cd qiskit-basis-constructor
-pip install .
+pip install qiskit-basis-constructor
+```
+
+You can also install a development version in editable mode directly from this repository:
+
+```bash
+git clone https://github.com/Qiskit/qiskit-basis-constructor
+pip install -e ./qiskit-basis-constructor
 ```
 
 ## Usage
