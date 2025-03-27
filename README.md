@@ -5,6 +5,11 @@ This package provides a translation-stage plugin for the Qiskit transpiler with 
 This translation plugin is an alternative to the Qiskit standard `translator`, which is an amalgamation of Qiskit's built-in `BasisTranslator` and `GateDirection` passes.
 This plugin is an exposure of a single transpiler pass, `BasisConstructor`, which does both jobs.
 
+> {!INFO]
+>
+> This package is provided as a public beta version of a plugin that is expected to be rewritten and included in Qiskit proper in the future.
+> This repository and the associated PyPI package will be archived and no further on it will be done once that happens.
+
 ## Installation
 
 > [!WARNING]
