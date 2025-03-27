@@ -2,6 +2,7 @@
 name = "qiskit-basis-constructor"
 authors = [
     { name  = "Jake Lishman", email = "jake.lishman@ibm.com" },
+    { name = "Qiskit Development Team", email = "qiskit@us.ibm.com" },
 ]
 classifiers = [
     "Intended Audience :: Developers",
