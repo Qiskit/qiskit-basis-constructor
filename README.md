@@ -8,7 +8,7 @@ This plugin is an exposure of a single transpiler pass, `BasisConstructor`, whic
 > [!NOTE]
 >
 > This package is provided as a public beta version of a plugin that is expected to be rewritten and included in Qiskit proper in the future.
-> This repository and the associated PyPI package will be archived and no further on it will be done once that happens.
+> This repository and the associated PyPI package will be archived and no further development on it will be done once that happens.
 
 ## Installation
 
