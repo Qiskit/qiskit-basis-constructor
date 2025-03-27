@@ -149,7 +149,7 @@ class BasisConstructor(TransformationPass):
         return out
 
     def _replacement_for(self, name, params, qargs) -> QuantumCircuit:
-        homogenized = self._target.qargs_order(qargs)
+        homogenized = self._target.qargs_order(qargs) or self._construct_global(tuple(qargs))
         # TODO: improve failure messages - we could jump to a failure path where we find all the
         # failures and produce a complete accounting of everything that went wrong.
         if (
@@ -183,6 +183,11 @@ class BasisConstructor(TransformationPass):
             params, inplace=False, strict=True, flat_input=True
         )
 
+    def _construct_global(self, qargs: tuple[int, ...]) -> _HomogenizedQargs:
+        node_index = self._target.add_explicit_node(qargs, [])
+        self._constructed[node_index] = self._construct(node_index)
+        return self._target.qargs_order(qargs)
+
     def _construct(self, node_index):
         entry = self._target.qargs_graph[node_index]
         base_circuit = QuantumCircuit(entry.num_qubits)
@@ -199,7 +204,10 @@ class BasisConstructor(TransformationPass):
                         for child, parent in parent_from_child.items()
                     },
                 )
-                node_indices[frozenset(sub_current_from_outer)] = (parent, sub_current_from_outer)
+                node_indices[frozenset(sub_current_from_outer)] = (
+                    parent,
+                    sub_current_from_outer,
+                )
                 extract_sub_qargs(node_indices, parent, sub_outer_from_current)
             return node_indices
 
@@ -208,14 +216,14 @@ class BasisConstructor(TransformationPass):
         )
 
         def rule_satisfied(name, homogenized_qargs):
-            if len(sub_qargs) == entry.num_qubits:
+            if len(homogenized_qargs) == entry.num_qubits:
                 return False
             if (
                 lookup := node_index_from_homogenized_qargs.get(frozenset(homogenized_qargs))
             ) is None:
                 return False
             parent, qarg_lookup = lookup
-            local_qargs = tuple(qarg_lookup[q] for q in sub_qargs)
+            local_qargs = tuple(qarg_lookup[q] for q in homogenized_qargs)
             return (name, local_qargs) in self._constructed.get(parent, {})
 
         def score_equivalence(equivalence, current_constructed):
@@ -270,6 +278,36 @@ class BasisConstructor(TransformationPass):
                     concrete_decomposition=qc,
                 ),
             )
+        for instruction in self._target.instructions_global.get(entry.num_qubits, []):
+            qc = QuantumCircuit(instruction.example.num_qubits, instruction.example.num_clbits)
+            qc.append(instruction.example, qc.qubits, qc.clbits)
+            qc.assign_parameters(
+                dict(
+                    zip(
+                        instruction.example.params,
+                        _get_parameter_vector(len(instruction.example.params)),
+                    )
+                ),
+                inplace=True,
+                flat_input=True,
+                strict=False,
+            )
+            for permutation in itertools.permutations(range(entry.num_qubits)):
+                heapq.heappush(
+                    candidates,
+                    _CandidateRule(
+                        score=tuple(
+                            component.score_target(instruction) for component in self._score
+                        ),
+                        name=instruction.name,
+                        qargs=permutation,
+                        abstract_decomposition=qc,
+                        # Rules that come from the `Target` are automatically concrete with
+                        # themselves.  Setting this forms the base case of the recursion in
+                        # reconstruction passes.
+                        concrete_decomposition=qc,
+                    ),
+                )
 
         constructed = {}
         used_by = collections.defaultdict(list)
@@ -290,7 +328,8 @@ class BasisConstructor(TransformationPass):
                         used_by[name, sub_qargs].append(this_id)
                     if rules_needed == 0:
                         heapq.heappush(
-                            candidates, score_equivalence(permuted_equivalence, constructed)
+                            candidates,
+                            score_equivalence(permuted_equivalence, constructed),
                         )
                     else:
                         available_rules.append(_AvailableRule(permuted_equivalence, rules_needed))
@@ -399,63 +438,39 @@ class _HomogenizedTarget:
     # For example, the `BasisTranslator` effectively wants this same information with
     # `bin_width=None`, though specifics like the `qargs_graph` will differ.
 
-    def __init__(
-        self, qargs_graph, node_index_from_qargs, instruction_globals, natural_qargs_order
-    ):
-        self.qargs_graph = qargs_graph
-        self.node_index_from_qargs = node_index_from_qargs
-        self.instruction_globals = instruction_globals
-        self.natural_qargs_order = natural_qargs_order
+    qargs_graph: rustworkx.PyDiGraph[_GraphEntry, None]
+    """The graph stores all the unique instruction sets for qargs in its nodes, with the
+    dependencies bewteen construction bases represented by directed edges.  As an example, qargs
+    `(0, 1)` would depend on `(0,)` and `(1,)` having been constructed first."""
+    node_index_from_qargs: dict[frozenset[int], int]
+    natural_qargs_order: dict[frozenset[int], _QargsOrder]
+    instructions_global: collections.defaultdict[list[_HomogenizedInstruction]]
+    node_index_from_key: dict[object, int]
+    """Mapping from each instruction-set key to the graph node index storing it."""
 
-    def qargs_order(self, qargs: tuple[int, ...]) -> _HomogenizedQargs:
-        lookup = frozenset(qargs)
-        if (index := self.node_index_from_qargs.get(lookup, None)) is None:
-            return None
-        natural_order = self.natural_qargs_order[lookup]
-        return _HomogenizedQargs(
-            index, tuple(natural_order.from_physical[qubit] for qubit in qargs)
-        )
+    @classmethod
+    def empty(cls) -> typing.Self:
+        self = cls()
+        self.qargs_graph = rustworkx.PyDiGraph()
+        self.natural_qargs_order = {}
+        self.node_index_from_key = {}
+        self.node_index_from_qargs = {}
+        self.instructions_global = collections.defaultdict(list)
+        return self
 
     @classmethod
     def from_target(cls, target: Target, bin_width: float | None) -> typing.Self:
+        self = cls.empty()
+
         # Strictly there's no _need_ to bin based on the negative log fidelity itself - we could bin
         # on the error and avoid several unnecessary exponentials and logarithms - but it's pleasant
         # to have `_HomogenizedInstruction` always have its logical score field represent the same
         # value, and the cost of this doesn't seem to show up too much.
-
-        def clip_error(properties: InstructionProperties | None):
-            error = getattr(properties, "error", None) or 0.0
-            if error <= 0.0:
-                return 0.0
-            if error >= 1.0:
-                return 1.0
-            return error
-
-        if bin_width is None:
-
-            def bin_neg_log_fidelity(properties):
-                return 0.0
-
-        else:
-
-            def bin_neg_log_fidelity(properties):
-                error = clip_error(properties)
-                if error == 0.0:
-                    return 0.0
-                if error == 1.0:
-                    return math.inf
-                if bin_width == 0.0:
-                    binned_error = error
-                elif math.isinf(bin_width):
-                    binned_error = 0.0
-                else:
-                    binned_error = math.exp(round(math.log(error) / bin_width) * bin_width)
-                return -math.log1p(-binned_error) if binned_error < 1.0 else math.inf
+        bin_neg_log_fidelity = _neg_log_fidelity_bin(bin_width)
 
         instructions_per_arity_per_qargs = collections.defaultdict(
             lambda: collections.defaultdict(list)
         )
-        instructions_global = []
         for name, properties in target.items():
             for qargs, instruction_properties in properties.items():
                 # While we're looking through everything in the `Target`, we store the candidate
@@ -475,10 +490,12 @@ class _HomogenizedTarget:
                     neg_log_fidelity = 0.0
 
                 if qargs is None:
-                    instructions_global.append(
+                    if (num_qubits := getattr(example, "num_qubits", None)) is None:
+                        _LOGGER.info("ignoring %s due to unknown qubit count", example)
+                    self.instructions_global[num_qubits].append(
                         _HomogenizedInstruction(
                             name,
-                            qargs,
+                            tuple(range(num_qubits)),
                             neg_log_fidelity,
                             example,
                         )
@@ -499,115 +516,27 @@ class _HomogenizedTarget:
 
         # Now we group all the property sets into "alike" ones.  Two groups of qubits are "alike" if
         # their set of interactions and associated fidelities (after rounding) are isomorphic, up to
-        # renumbering of qubits.
-
-        # The graph stores all the unique instruction sets for qargs in its nodes, with the
-        # dependencies bewteen construction bases represented by directed edges.  As an example,
-        # qargs `(0, 1)` would depend on `(0,)` and `(1,)` having been constructed first.
-        qargs_graph = rustworkx.PyDiGraph()
-        # Mapping from each instruction-set key to the graph node index storing it.
-        node_index_from_key = {}
-        node_index_from_qargs = {}
-        natural_qargs_order = {}
-
-        def instruction_key(instructions, reverse_mapping: list[int]):
-            forwards_mapping = {q: i for i, q in enumerate(reverse_mapping)}
-            return frozenset(
-                dataclasses.replace(entry, qargs=tuple(forwards_mapping[q] for q in entry.qargs))
-                for entry in instructions
-            )
-
-        def sub_qargs_key(permutation):
-            # This part of the key always has the same elements, it's the order of them we
-            # care about.
-            return tuple(
-                # TODO: the scaling here is needlessly awful for multi-q gates - there
-                # should be a better way of building the predecessors into the key.
-                node_index_from_qargs.get(frozenset(sub_qargs), None)
-                for k in range(1, len(permutation))
-                for sub_qargs in itertools.combinations(permutation, k)
-            )
-
-        # First handle the zero-qargs case.  This probably ought to be rare, but we handle it
-        # specially so that we can rely on `qargs` being non-empty after this.
-        zero_qargs = frozenset()
-        instructions_per_zero_qargs = instructions_per_arity_per_qargs.pop(0, {zero_qargs: []})
-        ((_, instructions_zero_qargs),) = instructions_per_zero_qargs.items()
-        node_index_from_qargs[zero_qargs] = qargs_graph.add_node(
-            _GraphEntry(0, [()], instructions_zero_qargs)
-        )
-        natural_qargs_order[zero_qargs] = _QargsOrder((), {})
-
-        for qargs_len, instructions_per_qargs in sorted(instructions_per_arity_per_qargs.items()):
+        # renumbering of qubits.  We ensure that the zero case is always present to be the root
+        # node, to simplify later logic.
+        if 0 not in instructions_per_arity_per_qargs:
+            _ = instructions_per_arity_per_qargs[0][frozenset()]
+        for _, instructions_per_qargs in sorted(instructions_per_arity_per_qargs.items()):
             for qargs, instructions in instructions_per_qargs.items():
-                # Obviously the scaling on this is absolute trash for multi-qubit instructions, but
-                # since it's just 1 and 2 attempts for 1q and 2q respectively, and we don't really
-                # deal with more than that, we can deal with it in the future.
-                #
-                # The loop is always entered at least once, so the `else` block can't `NameError`.
-                for permutation in itertools.permutations(sorted(qargs)):
-                    normalized_instructions = instruction_key(instructions, permutation)
-                    this_key = (sub_qargs_key(permutation), normalized_instructions)
-                    if (node_index := node_index_from_key.get(this_key)) is not None:
-                        qargs_graph[node_index].qargs.append(permutation)
-                        break
-                else:
-                    # Pragmatically, humans like to define gates in terms of sorted indices where
-                    # possible, so this tends to make the resulting homogenised target easier to
-                    # read.  It also coincides with the first key attempted, which makes successful
-                    # dictionary lookups likely to be faster in the loop.
-                    permutation = tuple(sorted(qargs))
-                    normalized_instructions = instruction_key(instructions, permutation)
-                    this_key = (sub_qargs_key(permutation), normalized_instructions)
-                    node_index = node_index_from_key[this_key] = qargs_graph.add_node(
-                        _GraphEntry(qargs_len, [permutation], normalized_instructions)
-                    )
+                self.add_explicit_node(qargs, instructions)
 
-                    def add_predecessor_edges_to(child_index, sub_qargs_pairs):
-                        parent_qargs_key = frozenset(physical for physical, _ in sub_qargs_pairs)
-                        parent_index = node_index_from_qargs.get(parent_qargs_key)
-                        if parent_index is None:
-                            for sub_qargs_pairs in itertools.combinations(
-                                sub_qargs_pairs, len(sub_qargs_pairs) - 1
-                            ):
-                                add_predecessor_edges_to(child_index, sub_qargs_pairs)
-                        else:
-                            parent_order = natural_qargs_order[parent_qargs_key]
-                            parent_from_child = {
-                                child: parent_order.from_physical[physical]
-                                for physical, child in sub_qargs_pairs
-                            }
-                            qargs_graph.add_edge(parent_index, child_index, parent_from_child)
-
-                    # This time we include the 0 qargs case.
-                    physical_child = [
-                        (physical, child) for child, physical in enumerate(permutation)
-                    ]
-                    for sub_qargs_pairs in itertools.combinations(physical_child, qargs_len - 1):
-                        add_predecessor_edges_to(node_index, sub_qargs_pairs)
-
-                node_index_from_qargs[qargs] = node_index
-                natural_qargs_order[qargs] = _QargsOrder(
-                    permutation, {qubit: index for index, qubit in enumerate(permutation)}
-                )
         # Now that the graph is fully constructed, we can go back and replace the negative log
         # fidelities derived from the binned errors with ones derived from the geometric mean of the
         # actual errors for all results that binned to that value.
 
-        def clipped_log(x):
-            if x == 0.0:
-                return -math.inf
-            return math.log(x)
-
-        for entry in qargs_graph.nodes():
+        for entry in self.qargs_graph.nodes():
 
             def average(instruction):
                 # Normal treatments of the geometric mean simply fail when encountering a zero.  We
                 # can safely have it average out to a zero error; that's still a meaningful result.
                 error = math.exp(
                     statistics.fmean(
-                        clipped_log(
-                            clip_error(
+                        _clipped_log(
+                            _clip_error(
                                 target[instruction.name][tuple(qargs[i] for i in instruction.qargs)]
                             )
                         )
@@ -624,7 +553,146 @@ class _HomogenizedTarget:
                 dataclasses.replace(instruction, neg_log_fidelity=average(instruction))
                 for instruction in entry.instructions
             ]
-        return cls(qargs_graph, node_index_from_qargs, instructions_global, natural_qargs_order)
+        return self
+
+    def add_explicit_node(self, qargs: tuple[int, ...], local_instructions: list) -> int:
+        if not qargs:
+            # We handle this specially so that the later loop-based logic can assume that the loop
+            # always runs at least once.
+            this_key = (self._sub_qargs_key(()), self._instruction_key(local_instructions, []))
+            node_index = self.node_index_from_key[this_key] = self.qargs_graph.add_node(
+                _GraphEntry(0, [()], local_instructions)
+            )
+            self.node_index_from_qargs[frozenset()] = node_index
+            self.natural_qargs_order[frozenset()] = _QargsOrder((), {})
+            return node_index
+
+        # Obviously the scaling on this is absolute trash for multi-qubit instructions, but
+        # since it's just 1 and 2 attempts for 1q and 2q respectively, and we don't really
+        # deal with more than that, we can deal with it in the future.
+        #
+        # The loop is always entered at least once, so the `else` block can't `NameError`.
+        qargs = tuple(sorted(qargs))
+        for permutation in itertools.permutations(qargs):
+            normalized_instructions = self._instruction_key(local_instructions, permutation)
+            this_key = (self._sub_qargs_key(permutation), normalized_instructions)
+            if (node_index := self.node_index_from_key.get(this_key)) is not None:
+                self.qargs_graph[node_index].qargs.append(permutation)
+                break
+        else:
+            # Pragmatically, humans like to define gates in terms of sorted indices where
+            # possible, so this tends to make the resulting homogenised target easier to
+            # read.  It also coincides with the first key attempted, which makes successful
+            # dictionary lookups likely to be faster in the loop.
+            permutation = qargs
+
+            normalized_instructions = self._instruction_key(local_instructions, permutation)
+            this_key = (self._sub_qargs_key(permutation), normalized_instructions)
+            node_index = self.node_index_from_key[this_key] = self.qargs_graph.add_node(
+                _GraphEntry(len(permutation), [permutation], normalized_instructions)
+            )
+
+            def add_predecessor_edges_to(child_index, sub_qargs_pairs):
+                parent_qargs_key = frozenset(physical for physical, _ in sub_qargs_pairs)
+                parent_index = self.node_index_from_qargs.get(parent_qargs_key)
+                if parent_index is None:
+                    for sub_qargs_pairs in itertools.combinations(
+                        sub_qargs_pairs, len(sub_qargs_pairs) - 1
+                    ):
+                        add_predecessor_edges_to(child_index, sub_qargs_pairs)
+                else:
+                    parent_order = self.natural_qargs_order[parent_qargs_key]
+                    parent_from_child = {
+                        child: parent_order.from_physical[physical]
+                        for physical, child in sub_qargs_pairs
+                    }
+                    self.qargs_graph.add_edge(parent_index, child_index, parent_from_child)
+
+            # This time we include the 0 qargs case.
+            physical_child = [(physical, child) for child, physical in enumerate(permutation)]
+            for sub_qargs_pairs in itertools.combinations(physical_child, len(permutation) - 1):
+                add_predecessor_edges_to(node_index, sub_qargs_pairs)
+
+        self.node_index_from_qargs[frozenset(qargs)] = node_index
+        self.natural_qargs_order[frozenset(qargs)] = _QargsOrder(
+            permutation, {qubit: index for index, qubit in enumerate(permutation)}
+        )
+        return node_index
+
+    def qargs_order(self, qargs: tuple[int, ...]) -> _HomogenizedQargs:
+        lookup = frozenset(qargs)
+        if (index := self.node_index_from_qargs.get(lookup, None)) is None:
+            return None
+        natural_order = self.natural_qargs_order[lookup]
+        return _HomogenizedQargs(
+            index, tuple(natural_order.from_physical[qubit] for qubit in qargs)
+        )
+
+    @staticmethod
+    def _instruction_key(instructions, reverse_mapping: list[int]):
+        forwards_mapping = {q: i for i, q in enumerate(reverse_mapping)}
+        return frozenset(
+            dataclasses.replace(entry, qargs=tuple(forwards_mapping[q] for q in entry.qargs))
+            for entry in instructions
+        )
+
+    def _sub_qargs_key(self, permutation):
+        def index_from_qargs(sub_qargs):
+            if (node_index := self.node_index_from_qargs.get(frozenset(sub_qargs), None)) is None:
+                # This is a subset of the qargs under consideration, and since we construct in
+                # increasing instruction arity, this must refer to a node that can only have global
+                # operations defined.
+                return self.add_explicit_node(tuple(sub_qargs), [])
+            return node_index
+
+        # This part of the key always has the same elements, it's the order of them we
+        # care about.  We assume that the zero-qargs case is always already present before this
+        # function runs for the first time.
+        return tuple(
+            # TODO: the scaling here is needlessly awful for multi-q gates - there
+            # should be a better way of building the predecessors into the key.
+            index_from_qargs(sub_qargs)
+            for k in range(len(permutation))
+            for sub_qargs in itertools.combinations(permutation, k)
+        )
+
+
+def _neg_log_fidelity_bin(
+    bin_width: float | None,
+) -> typing.Callable[[InstructionProperties], float]:
+    if bin_width is None:
+        return lambda properties: 0.0
+
+    def bin_neg_log_fidelity(properties):
+        error = _clip_error(properties)
+        if error == 0.0:
+            return 0.0
+        if error == 1.0:
+            return math.inf
+        if bin_width == 0.0:
+            binned_error = error
+        elif math.isinf(bin_width):
+            binned_error = 0.0
+        else:
+            binned_error = math.exp(round(math.log(error) / bin_width) * bin_width)
+        return -math.log1p(-binned_error) if binned_error < 1.0 else math.inf
+
+    return bin_neg_log_fidelity
+
+
+def _clip_error(properties: InstructionProperties | None):
+    error = getattr(properties, "error", None) or 0.0
+    if error <= 0.0:
+        return 0.0
+    if error >= 1.0:
+        return 1.0
+    return error
+
+
+def _clipped_log(x):
+    if x == 0.0:
+        return -math.inf
+    return math.log(x)
 
 
 @dataclasses.dataclass

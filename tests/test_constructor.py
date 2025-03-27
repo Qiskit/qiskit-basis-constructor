@@ -375,14 +375,15 @@ class TestConstructor(unittest.TestCase):
 
     def test_global_operation(self):
         err_low = InstructionProperties(error=1e-8)
-        err_med = InstructionProperties(error=1e-3)
+        err_med_1q = InstructionProperties(error=1e-5)
+        err_med_2q = InstructionProperties(error=1e-3)
         err_high = InstructionProperties(error=1e-1)
         target = Target(4)
         # X, CX and H are all globals with medium error rates - they should be chosen iff no rule
         # for the particular qargs contains a `err_high`.
-        target.add_instruction(lib.XGate(), {None: err_med})
-        target.add_instruction(lib.CXGate(), {None: err_med})
-        target.add_instruction(lib.HGate(), {None: err_med})
+        target.add_instruction(lib.XGate(), {None: err_med_1q})
+        target.add_instruction(lib.HGate(), {None: err_med_1q})
+        target.add_instruction(lib.CXGate(), {None: err_med_2q})
         # Specific instructions.  We should use the globals for cases where any of the error rates
         # are `err_high`.  Note we don't define any specific instructions on q3;
         target.add_instruction(lib.SGate(), {(0,): err_high, (1,): err_low, (2,): err_low})
@@ -410,7 +411,7 @@ class TestConstructor(unittest.TestCase):
         qc.cx(0, 2)
         qc.cx(2, 0)
 
-        expected = QuantumCircuit(4)
+        expected = QuantumCircuit(4, global_phase=math.pi)
         # Specific error is lower.
         expected.sx(0)
         expected.sx(0)
@@ -419,9 +420,9 @@ class TestConstructor(unittest.TestCase):
         # Global error is lower.
         expected.x(2)
         # All done by globals.
-        expected.x(3)
         expected.h(3)
         expected.x(3)
+        expected.h(3)
 
         # The S.SX.S form is cheaper than H on qubit 1, and specific CZ is cheaper than global CX.
         expected.barrier()
@@ -460,5 +461,62 @@ class TestConstructor(unittest.TestCase):
 
         pass_ = BasisConstructor(
             standard_equivalence_library(), [LogFidelity(), GateCount()], target
+        )
+        self.assertEqual(pass_(qc), expected)
+
+    def test_global_depending_on_concrete(self):
+        target = Target(3)
+        # CZ is globally available, but the available 1q operations depend on the qubit.  We should
+        # be able to construct CX on every pair of qubits, but the decomposition should depend on
+        # the available 1q operations, none of which are global.
+        target.add_instruction(lib.CZGate(), {None: None})
+        target.add_instruction(lib.HGate(), {(0,): None, (2,): None})
+        target.add_instruction(lib.SXGate(), {(1,): None})
+        target.add_instruction(lib.SGate(), {(1,): None})
+
+        qc = QuantumCircuit(3)
+        qc.cx(0, 1)
+        qc.cx(1, 0)
+        qc.barrier()
+        qc.cx(1, 2)
+        qc.cx(2, 1)
+        qc.barrier()
+        qc.cx(0, 2)
+        qc.cx(2, 0)
+
+        expected = QuantumCircuit(3, global_phase=math.pi)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        expected.cz(0, 1)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        expected.h(0)
+        expected.cz(1, 0)
+        expected.h(0)
+
+        expected.barrier()
+        expected.h(2)
+        expected.cz(1, 2)
+        expected.h(2)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+        expected.cz(2, 1)
+        expected.s(1)
+        expected.sx(1)
+        expected.s(1)
+
+        expected.barrier()
+        expected.h(2)
+        expected.cz(0, 2)
+        expected.h(2)
+        expected.h(0)
+        expected.cz(2, 0)
+        expected.h(0)
+
+        pass_ = BasisConstructor(
+            standard_equivalence_library(), [GateCount(2), GateCount()], target
         )
         self.assertEqual(pass_(qc), expected)
