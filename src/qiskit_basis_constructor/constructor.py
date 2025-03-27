@@ -490,8 +490,11 @@ class _HomogenizedTarget:
                     neg_log_fidelity = 0.0
 
                 if qargs is None:
-                    if (num_qubits := getattr(example, "num_qubits", None)) is None:
+                    if not isinstance(num_qubits := getattr(example, "num_qubits", None), int):
+                        # The `isinstance` check is to handle the case that we get a gate class
+                        # where the `num_qubits` field is a property.
                         _LOGGER.info("ignoring %s due to unknown qubit count", example)
+                        continue
                     self.instructions_global[num_qubits].append(
                         _HomogenizedInstruction(
                             name,
